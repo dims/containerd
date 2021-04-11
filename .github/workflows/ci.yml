@@ -4,6 +4,7 @@ on:
     branches:
       - master
       - 'release/**'
+      - gh-using-aarch64
   pull_request:
     branches:
       - master
@@ -476,6 +477,46 @@ jobs:
         run: |
           make test
         working-directory: src/github.com/containerd/containerd
+
+  tests-on-aarch64:
+    name: aarch64 unit tests
+    runs-on: ubuntu-18.04
+    timeout-minutes: 45
+    needs: [project, linters, protos, man]
+
+    steps:
+      - uses: actions/setup-go@v2
+        with:
+          go-version: '1.16.2'
+
+      - uses: actions/checkout@v2
+        with:
+          path: src/github.com/containerd/containerd
+
+      - name: Set env
+        run: |
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
+
+      - uses: uraimo/run-on-arch-action@v2.0.5
+        name: Tests
+        id: runcmd
+        env:
+          GOPROXY: direct
+        with:
+          arch: aarch64
+          distro: ubuntu20.04
+
+          # Set an output parameter `uname` for use in subsequent steps
+          run: |
+            uname -a
+            apt-get update && apt-get install -y -qq git wget curl build-essential cmake binutils-aarch64-linux-gnu crossbuild-essential-arm64
+            cd "${{ github.workspace }}/src/github.com/containerd/containerd"
+            wget https://golang.org/dl/go1.16.2.linux-arm64.tar.gz
+            tar -C /usr/local -xzvf go1.16.2.linux-arm64.tar.gz
+            export PATH=$PATH:/usr/local/go/bin
+            make test
+          working-directory: src/github.com/containerd/containerd
 
   cgroup2:
     name: CGroupsV2 and SELinux Integration

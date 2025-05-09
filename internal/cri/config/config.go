@@ -304,6 +304,11 @@ type ImageConfig struct {
 	// (PluginConfig).SandboxImage string `toml:"sandbox_image" json:"sandboxImage"`
 	PinnedImages map[string]string `toml:"pinned_images" json:"pinned_images"`
 
+	// SandboxBinary is the path to a binary on disk that will be used to create
+	// a sandbox container image. If specified, this binary will be used instead of
+	// the container image specified in PinnedImages["sandbox"].
+	SandboxBinary string `toml:"sandbox_binary" json:"sandboxBinary"`
+
 	// RuntimePlatforms is map between the runtime and the image platform to
 	// use for that runtime. When resolving an image for a runtime, this
 	// mapping will be used to select the image for the platform and the

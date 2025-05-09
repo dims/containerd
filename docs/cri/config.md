@@ -372,6 +372,11 @@ version = 2
 
   # sandbox_image is the image used by sandbox container.
   sandbox_image = "registry.k8s.io/pause:3.10"
+  
+  # sandbox_binary is the path to a binary on disk that will be used to create
+  # a sandbox container image. If specified, this binary will be used instead of
+  # the container image specified in sandbox_image.
+  # sandbox_binary = "/path/to/pause"
 
   # stats_collect_period is the period (in seconds) of snapshots stats collection.
   stats_collect_period = 10

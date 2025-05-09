@@ -19,6 +19,7 @@ package images
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -27,7 +28,10 @@ import (
 	"github.com/containerd/containerd/v2/core/transfer"
 	criconfig "github.com/containerd/containerd/v2/internal/cri/config"
 	"github.com/containerd/containerd/v2/internal/cri/constants"
+	"github.com/containerd/containerd/v2/internal/cri/labels"
+	"github.com/containerd/containerd/v2/internal/cri/sandbox"
 	"github.com/containerd/containerd/v2/internal/cri/server/images"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/containerd/v2/plugins/services/warning"
 	"github.com/containerd/containerd/v2/version"
@@ -60,7 +64,8 @@ func init() {
 			}
 			mdb := m.(*metadata.DB)
 
-			if warnings, err := criconfig.ValidateImageConfig(ic.Context, &config); err != nil {
+			imageCtx := namespaces.WithNamespace(ic.Context, "k8s.io")
+			if warnings, err := criconfig.ValidateImageConfig(imageCtx, &config); err != nil {
 				return nil, fmt.Errorf("invalid cri image config: %w", err)
 			} else if len(warnings) > 0 {
 				ws, err := ic.GetSingle(plugins.WarningPlugin)
@@ -69,12 +74,12 @@ func init() {
 				}
 				warn := ws.(warning.Service)
 				for _, w := range warnings {
-					warn.Emit(ic.Context, w)
+					warn.Emit(imageCtx, w)
 				}
 			}
 
 			if !config.UseLocalImagePull {
-				criconfig.CheckLocalImagePullConfigs(ic.Context, &config)
+				criconfig.CheckLocalImagePullConfigs(imageCtx, &config)
 			}
 
 			ts, err := ic.GetSingle(plugins.TransferPlugin)
@@ -155,6 +160,56 @@ func init() {
 				return nil, fmt.Errorf("failed to create image service: %w", err)
 			}
 
+			// If sandbox_binary is specified, create a sandbox image from the binary
+			if config.SandboxBinary != "" {
+				log.L.Infof("Sandbox binary specified: %s", config.SandboxBinary)
+
+				// Get binary info to check if it has changed
+				binaryInfo, err := os.Stat(config.SandboxBinary)
+				if err != nil {
+					return nil, fmt.Errorf("failed to stat sandbox binary %q: %w", config.SandboxBinary, err)
+				}
+
+				// Generate the image name based on binary metadata
+				modTime := sandbox.FormatTimestamp(binaryInfo.ModTime())
+				size := binaryInfo.Size()
+				sandboxImageName := fmt.Sprintf(sandbox.SandboxImageFormat, sandbox.SandboxImageName, modTime, size)
+
+				// Check if the sandbox image already exists
+				_, err = options.Images.Get(imageCtx, sandboxImageName)
+				if err != nil {
+					// Image doesn't exist, create it
+					sandboxImage, err := sandbox.CreateSandboxImageFromBinary(imageCtx, mdb.ContentStore(), config.SandboxBinary)
+					if err != nil {
+						return nil, fmt.Errorf("failed to create sandbox image from binary: %w", err)
+					}
+
+					sandboxImage.Labels = map[string]string{
+						labels.ImageLabelKey:       labels.ImageLabelValue,
+						labels.PinnedImageLabelKey: labels.PinnedImageLabelValue,
+					}
+
+					// Import the image into containerd
+					if _, err := options.Images.Create(imageCtx, sandboxImage); err != nil {
+						return nil, fmt.Errorf("failed to import sandbox image: %w", err)
+					}
+					log.L.Infof("Successfully created sandbox image from binary")
+					if _, err := options.Images.Update(imageCtx, sandboxImage); err != nil {
+						return nil, fmt.Errorf("failed to update sandbox image: %w", err)
+					}
+					log.L.Infof("Successfully updated sandbox image")
+				} else {
+					log.L.Infof("Sandbox image %s already exists, skipping creation", sandboxImageName)
+				}
+
+				// Override the sandbox image in the config
+				if config.PinnedImages == nil {
+					config.PinnedImages = make(map[string]string)
+				}
+				config.PinnedImages["sandbox"] = sandboxImageName
+				log.L.Infof("Using sandbox image created from binary: %s", sandboxImageName)
+			}
+
 			return service, nil
 		},
 		ConfigMigration: configMigration,
@@ -192,6 +247,10 @@ func migrateConfig(dst, src map[string]interface{}) {
 
 	if simage, ok := src["sandbox_image"]; ok {
 		pinnedImages["sandbox"] = simage
+	}
+
+	if sbinary, ok := src["sandbox_binary"]; ok {
+		dst["sandbox_binary"] = sbinary
 	}
 	if len(pinnedImages) > 0 {
 		dst["pinned_images"] = pinnedImages

@@ -193,8 +193,13 @@ func init() {
 					if _, err := options.Images.Create(imageCtx, sandboxImage); err != nil {
 						return nil, fmt.Errorf("failed to import sandbox image: %w", err)
 					}
+					fieldpaths := []string{
+						"target",
+						labels.ImageLabelKey,
+						labels.PinnedImageLabelKey,
+					}
 					log.L.Infof("Successfully created sandbox image from binary")
-					if _, err := options.Images.Update(imageCtx, sandboxImage); err != nil {
+					if _, err := options.Images.Update(imageCtx, sandboxImage, fieldpaths...); err != nil {
 						return nil, fmt.Errorf("failed to update sandbox image: %w", err)
 					}
 					log.L.Infof("Successfully updated sandbox image")

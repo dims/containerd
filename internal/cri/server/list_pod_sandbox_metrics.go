@@ -110,11 +110,14 @@ func (c *criService) updatePodSandboxMetrics(ctx context.Context, sandboxID stri
 
 // getMetrics is supposed to be called from ListPodSandBoxMetrics
 func (m *MetricsServer) getMetrics(sandBoxID string) *runtime.PodSandboxMetrics {
-	var sm *SandboxMetrics
-	// TODO: akhilerm decide if we should query for metrics if this is not available
 	sm, ok := m.sandboxMetrics[sandBoxID]
 	if !ok {
-		// we should not error, but provide the metrics that are available
+		// Return empty metrics structure with just the ID
+		return &runtime.PodSandboxMetrics{
+			PodSandboxId:     sandBoxID,
+			Metrics:          []*runtime.Metric{},
+			ContainerMetrics: []*runtime.ContainerMetrics{},
+		}
 	}
 	return sm.metric
 }
@@ -418,23 +421,153 @@ func (c *criService) diskIOMetrics(ctx context.Context, stats interface{}) (*con
 	cm := &containerDiskIoMetrics{}
 	switch metrics := stats.(type) {
 	case *cg1.Metrics:
-		cm.IoQueued = diskStatsCopyCG1(metrics.Blkio.GetIoQueuedRecursive())
-		cm.IoMerged = diskStatsCopyCG1(metrics.Blkio.GetIoMergedRecursive())
-		cm.IoServiceBytes = diskStatsCopyCG1(metrics.Blkio.GetIoServiceBytesRecursive())
-		cm.IoServiced = diskStatsCopyCG1(metrics.Blkio.GetIoServicedRecursive())
-		cm.IoTime = diskStatsCopyCG1(metrics.Blkio.GetIoTimeRecursive())
+		// Convert []*BlkIOEntry to []BlkIOEntry for diskStatsCopyCG1
+		if metrics.Blkio != nil {
+			if ioQueued := metrics.Blkio.GetIoQueuedRecursive(); len(ioQueued) > 0 {
+				entries := make([]cg1.BlkIOEntry, len(ioQueued))
+				for i, entry := range ioQueued {
+					if entry != nil {
+						entries[i] = *entry
+					}
+				}
+				cm.IoQueued = diskStatsCopyCG1(entries)
+			}
+			
+			if ioMerged := metrics.Blkio.GetIoMergedRecursive(); len(ioMerged) > 0 {
+				entries := make([]cg1.BlkIOEntry, len(ioMerged))
+				for i, entry := range ioMerged {
+					if entry != nil {
+						entries[i] = *entry
+					}
+				}
+				cm.IoMerged = diskStatsCopyCG1(entries)
+			}
+			
+			if ioServiceBytes := metrics.Blkio.GetIoServiceBytesRecursive(); len(ioServiceBytes) > 0 {
+				entries := make([]cg1.BlkIOEntry, len(ioServiceBytes))
+				for i, entry := range ioServiceBytes {
+					if entry != nil {
+						entries[i] = *entry
+					}
+				}
+				cm.IoServiceBytes = diskStatsCopyCG1(entries)
+			}
+			
+			if ioServiced := metrics.Blkio.GetIoServicedRecursive(); len(ioServiced) > 0 {
+				entries := make([]cg1.BlkIOEntry, len(ioServiced))
+				for i, entry := range ioServiced {
+					if entry != nil {
+						entries[i] = *entry
+					}
+				}
+				cm.IoServiced = diskStatsCopyCG1(entries)
+			}
+			
+			if ioTime := metrics.Blkio.GetIoTimeRecursive(); len(ioTime) > 0 {
+				entries := make([]cg1.BlkIOEntry, len(ioTime))
+				for i, entry := range ioTime {
+					if entry != nil {
+						entries[i] = *entry
+					}
+				}
+				cm.IoTime = diskStatsCopyCG1(entries)
+			}
+			
+			if ioServiceTime := metrics.Blkio.GetIoServiceTimeRecursive(); len(ioServiceTime) > 0 {
+				entries := make([]cg1.BlkIOEntry, len(ioServiceTime))
+				for i, entry := range ioServiceTime {
+					if entry != nil {
+						entries[i] = *entry
+					}
+				}
+				cm.IoServiceTime = diskStatsCopyCG1(entries)
+			}
+			
+			if ioWaitTime := metrics.Blkio.GetIoWaitTimeRecursive(); len(ioWaitTime) > 0 {
+				entries := make([]cg1.BlkIOEntry, len(ioWaitTime))
+				for i, entry := range ioWaitTime {
+					if entry != nil {
+						entries[i] = *entry
+					}
+				}
+				cm.IoWaitTime = diskStatsCopyCG1(entries)
+			}
+			
+			if sectors := metrics.Blkio.GetSectorsRecursive(); len(sectors) > 0 {
+				entries := make([]cg1.BlkIOEntry, len(sectors))
+				for i, entry := range sectors {
+					if entry != nil {
+						entries[i] = *entry
+					}
+				}
+				cm.Sectors = diskStatsCopyCG1(entries)
+			}
+		}
+		return cm, nil
 	case *cg2.Metrics:
-		// TODO
+		// For cgroup v2, we need to parse the io.stat file
+		if metrics.Io != nil {
+			// Convert cgroup v2 io stats to our format
+			cm.IoServiceBytes = make([]containerPerDiskStats, 0)
+			cm.IoServiced = make([]containerPerDiskStats, 0)
+			
+			// metrics.Io is a pointer to IOStat, not a slice
+			// We need to iterate through its fields
+			if metrics.Io.Usage != nil {
+				for _, entry := range metrics.Io.Usage {
+					if entry.Major == 0 && entry.Minor == 0 {
+						// Skip total stats
+						continue
+					}
+					
+					// Handle IoServiceBytes
+					diskStat := containerPerDiskStats{
+						Major:  entry.Major,
+						Minor:  entry.Minor,
+						Device: fmt.Sprintf("%d:%d", entry.Major, entry.Minor),
+						Stats:  make(map[string]uint64),
+					}
+					
+					// Map rbytes to Read and wbytes to Write to match cgroup v1 format
+					if entry.Rbytes > 0 {
+						diskStat.Stats["Read"] = entry.Rbytes
+					}
+					if entry.Wbytes > 0 {
+						diskStat.Stats["Write"] = entry.Wbytes
+					}
+					
+					cm.IoServiceBytes = append(cm.IoServiceBytes, diskStat)
+					
+					// Handle IoServiced
+					ioServicedStat := containerPerDiskStats{
+						Major:  entry.Major,
+						Minor:  entry.Minor,
+						Device: fmt.Sprintf("%d:%d", entry.Major, entry.Minor),
+						Stats:  make(map[string]uint64),
+					}
+					
+					// Map rios to Read and wios to Write
+					if entry.Rios > 0 {
+						ioServicedStat.Stats["Read"] = entry.Rios
+					}
+					if entry.Wios > 0 {
+						ioServicedStat.Stats["Write"] = entry.Wios
+					}
+					
+					cm.IoServiced = append(cm.IoServiced, ioServicedStat)
+				}
+			}
+		}
+		return cm, nil
 	default:
 		return nil, fmt.Errorf("unexpected metrics type: %T from %s", metrics, reflect.TypeOf(metrics).Elem().PkgPath())
 	}
-
 }
-
 func generateSandboxNetworkMetrics(metrics []containerNetworkMetrics) []*runtime.Metric {
+	// Aggregate metrics across all network interfaces
 	nm := containerNetworkMetrics{}
-	// TODO? should we have separate metrics per interface with different labels or add them together
-	//  and expose it
+	// We're aggregating metrics across all interfaces for simplicity and consistency
+	// This matches Kubernetes' approach to network metrics
 	for _, m := range metrics {
 		nm.RxBytes += m.RxBytes
 		nm.RxPackets += m.RxPackets

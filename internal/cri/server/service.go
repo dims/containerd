@@ -255,6 +255,12 @@ func NewCRIService(options *CRIServiceOptions) (CRIService, runtime.RuntimeServi
 		SupplementalGroupsPolicy: true,
 	}
 
+	// Initialize metrics server
+	c.metricsServer = MetricsServer{
+		collectionPeriod: 30 * time.Second, // Default collection period of 30 seconds
+		sandboxMetrics:   make(map[string]*SandboxMetrics),
+	}
+
 	return c, c, nil
 }
 
@@ -305,6 +311,35 @@ func (c *criService) Run(ready func()) error {
 		if err := c.streamServer.Start(true); err != nil && err != http.ErrServerClosed {
 			log.L.WithError(err).Error("Failed to start streaming server")
 			streamServerErrCh <- err
+		}
+	}()
+
+	// Start metrics collection
+	log.L.Info("Start metrics collection")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		ticker := time.NewTicker(c.metricsServer.collectionPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				sandboxes := c.sandboxStore.List()
+				for _, sandbox := range sandboxes {
+					if sandbox.Status.Get().State == sandboxstore.StateReady {
+						c.updatePodSandboxMetrics(ctx, sandbox.ID)
+					}
+				}
+				// Clean up deleted sandboxes
+				for id := range c.metricsServer.sandboxMetrics {
+					_, err := c.sandboxStore.Get(id)
+					if err != nil {
+						delete(c.metricsServer.sandboxMetrics, id)
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 

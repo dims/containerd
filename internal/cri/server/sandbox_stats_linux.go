@@ -128,7 +128,9 @@ func metricsForSandbox(sandbox sandboxstore.Sandbox) (interface{}, error) {
 	cgroupPath := sandbox.Config.GetLinux().GetCgroupParent()
 
 	if cgroupPath == "" {
-		return nil, fmt.Errorf("failed to get cgroup metrics for sandbox %v because cgroupPath is empty", sandbox.ID)
+		// Return nil metrics for sandboxes without cgroup configuration
+		// This can happen for sandboxes that don't have Linux-specific configuration
+		return nil, errdefs.ErrUnavailable
 	}
 
 	var statsx interface{}

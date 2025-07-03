@@ -388,6 +388,19 @@ func diskStatsCopy1(diskStat map[diskKey]*containerPerDiskStats) []containerPerD
 	return stat
 }
 
+func convertBlkIOEntryPointers(entries []*cg1.BlkIOEntry) []cg1.BlkIOEntry {
+	if entries == nil {
+		return nil
+	}
+	result := make([]cg1.BlkIOEntry, len(entries))
+	for i, entry := range entries {
+		if entry != nil {
+			result[i] = *entry
+		}
+	}
+	return result
+}
+
 func diskStatsCopyCG1(blkioStats []cg1.BlkIOEntry) (stat []containerPerDiskStats) {
 	if len(blkioStats) == 0 {
 		return
@@ -418,17 +431,17 @@ func (c *criService) diskIOMetrics(ctx context.Context, stats interface{}) (*con
 	cm := &containerDiskIoMetrics{}
 	switch metrics := stats.(type) {
 	case *cg1.Metrics:
-		cm.IoQueued = diskStatsCopyCG1(metrics.Blkio.GetIoQueuedRecursive())
-		cm.IoMerged = diskStatsCopyCG1(metrics.Blkio.GetIoMergedRecursive())
-		cm.IoServiceBytes = diskStatsCopyCG1(metrics.Blkio.GetIoServiceBytesRecursive())
-		cm.IoServiced = diskStatsCopyCG1(metrics.Blkio.GetIoServicedRecursive())
-		cm.IoTime = diskStatsCopyCG1(metrics.Blkio.GetIoTimeRecursive())
+		cm.IoQueued = diskStatsCopyCG1(convertBlkIOEntryPointers(metrics.Blkio.GetIoQueuedRecursive()))
+		cm.IoMerged = diskStatsCopyCG1(convertBlkIOEntryPointers(metrics.Blkio.GetIoMergedRecursive()))
+		cm.IoServiceBytes = diskStatsCopyCG1(convertBlkIOEntryPointers(metrics.Blkio.GetIoServiceBytesRecursive()))
+		cm.IoServiced = diskStatsCopyCG1(convertBlkIOEntryPointers(metrics.Blkio.GetIoServicedRecursive()))
+		cm.IoTime = diskStatsCopyCG1(convertBlkIOEntryPointers(metrics.Blkio.GetIoTimeRecursive()))
 	case *cg2.Metrics:
 		// TODO
 	default:
 		return nil, fmt.Errorf("unexpected metrics type: %T from %s", metrics, reflect.TypeOf(metrics).Elem().PkgPath())
 	}
-
+	return cm, nil
 }
 
 func generateSandboxNetworkMetrics(metrics []containerNetworkMetrics) []*runtime.Metric {

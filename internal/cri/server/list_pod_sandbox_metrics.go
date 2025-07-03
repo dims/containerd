@@ -115,6 +115,10 @@ func (m *MetricsServer) getMetrics(sandBoxID string) *runtime.PodSandboxMetrics 
 	sm, ok := m.sandboxMetrics[sandBoxID]
 	if !ok {
 		// we should not error, but provide the metrics that are available
+		return nil
+	}
+	if sm == nil {
+		return nil
 	}
 	return sm.metric
 }
@@ -124,9 +128,19 @@ func (c *criService) ListPodSandboxMetrics(ctx context.Context, r *runtime.ListP
 	//metricsList := c.sandboxStore.
 
 	podMetrics := make([]*runtime.PodSandboxMetrics, 0)
+	
+	// Check if metricsServer is initialized
+	if c.metricsServer.sandboxMetrics == nil {
+		return &runtime.ListPodSandboxMetricsResponse{
+			PodMetrics: podMetrics,
+		}, nil
+	}
+	
 	for _, sandbox := range sandboxList {
 		m := c.metricsServer.getMetrics(sandbox.ID)
-		podMetrics = append(podMetrics, m)
+		if m != nil {
+			podMetrics = append(podMetrics, m)
+		}
 	}
 
 	return &runtime.ListPodSandboxMetricsResponse{
